@@ -14,6 +14,7 @@ from app.services.conflict_resolve import ConflictResolveService
 from app.services.resume_point import ResumePointService
 from app.services.speed_control import SpeedControlService
 from app.services.reject_record import RejectRecordService
+from app.services.remap_worklist import RemapWorklistService
 from app.services.format_adapt import FormatAdaptService
 from app.services.transfer_lineage import TransferLineageService
 from app.services.history_archive import HistoryArchiveService
@@ -34,6 +35,7 @@ SERVICES: dict[str, BaseModuleService] = {
     "resume_point": ResumePointService(),
     "speed_control": SpeedControlService(),
     "reject_record": RejectRecordService(),
+    "remap_worklist": RemapWorklistService(),
     "format_adapt": FormatAdaptService(),
     "transfer_lineage": TransferLineageService(),
     "history_archive": HistoryArchiveService(),

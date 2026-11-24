@@ -22,13 +22,19 @@ class RejectRecordService(BaseModuleService):
     ACTION_RULES = {"提交处置": "待处置", "确认退回": "已退回", "标记丢弃": "已丢弃"}
     NEGATIVE_ACTIONS = ["标记丢弃"]
 
-    def create_rejection(self, batch_code: str, stage: str, reason: str) -> dict[str, Any]:
+    def create_rejection(
+        self,
+        batch_code: str,
+        stage: str,
+        reason: str,
+        record_key: str = "",
+    ) -> dict[str, Any]:
         """创建拒收记录：在校验或对账环节对不满足质量要求的批次创建拒收，归档原因与回执。"""
-        reject_code = f"REJE-{batch_code}-{int(time.time())}"
+        reject_code = f"REJE-{batch_code}-{int(time.time() * 1000)}-{len(store.rows(self.MODULE))}"
         values = {
             "拒收编号": reject_code,
             "批次编号": batch_code,
-            "记录主键": f"PK_REJ_{batch_code}",
+            "记录主键": record_key or f"PK_REJ_{batch_code}",
             "拒收环节": stage,
             "拒收原因": reason,
             "回执编号": f"RC-{reject_code}",
@@ -93,3 +99,43 @@ class RejectRecordService(BaseModuleService):
         if batch_code:
             rows = [r for r in rows if batch_code in r.get("批次编号", "")]
         return rows
+
+    def query_rejections_with_mapping(self, reason: str, batch_code: str = "") -> dict[str, Any]:
+        """按拒收原因查询待处置拒收回执，并关联字段契约的字段映射明细。
+
+        一份筛选结果同时带回原拒收原因和产生拒收时实际使用的映射版本，
+        作为补转换筛选入口，供操作员核对后生成待重新映射记录清单。
+        """
+        remap_svc = self._safe_import(
+            "app.services.remap_worklist", "RemapWorklistService")()
+        reject_rows = [
+            row for row in store.rows(self.MODULE)
+            if row.get("status") == "待处置"
+            and reason.casefold() in str(row.get("拒收原因", "")).casefold()
+            and (not batch_code or batch_code in str(row.get("批次编号", "")))
+        ]
+        contracts = store.rows("field_contract")
+        items = []
+        for row in reject_rows:
+            contract = remap_svc._match_contract(contracts, row, {})
+            items.append({
+                "拒收编号": row.get("拒收编号", ""),
+                "批次编号": row.get("批次编号", ""),
+                "记录主键": row.get("记录主键", ""),
+                "拒收环节": row.get("拒收环节", ""),
+                "拒收原因": row.get("拒收原因", ""),
+                "回执编号": row.get("回执编号", ""),
+                "契约编号": contract.get("契约编号", ""),
+                "源字段": contract.get("源字段", ""),
+                "目标字段": contract.get("目标字段", ""),
+                "数据类型": contract.get("数据类型", ""),
+                "转换规则": contract.get("转换规则", ""),
+                "映射版本": contract.get("契约版本", "v1.0"),
+            })
+        return {"reason": reason, "total": len(items), "items": items}
+
+    def create_remap_worklist(self, reason: str, batch_code: str = "") -> dict[str, Any]:
+        """拒收回执侧入口：按原因筛选并生成待重新映射记录清单（与字段契约共享）。"""
+        remap_svc = self._safe_import(
+            "app.services.remap_worklist", "RemapWorklistService")()
+        return remap_svc.build_worklist(reason, batch_code)

@@ -125,3 +125,70 @@ class FieldContractService(BaseModuleService):
     def get_active_contracts(self) -> list[dict[str, Any]]:
         """获取所有已生效的字段映射契约列表，供下游模块按规则执行类型转换。"""
         return [r for r in store.rows(self.MODULE) if r.get("status") == "已生效"]
+
+    def revise_contract_rule(
+        self,
+        contract_code: str,
+        new_rule: str,
+        new_version: str,
+        data_type: str = "",
+    ) -> dict[str, Any]:
+        """字段契约增加新规则：为同一源/目标字段生成新版本契约并立即生效。
+
+        旧版本契约标记为已废弃，补转换时按新版本规则执行类型转换；
+        待重新映射清单仍保留拒收时的原映射版本，便于追溯实际映射版本变化。
+        """
+        previous = next(
+            (r for r in store.rows(self.MODULE) if r.get("契约编号") == contract_code),
+            None,
+        )
+        if previous is None:
+            return {"error": f"契约 {contract_code} 不存在，无法增加新规则"}
+
+        # 旧版本下线
+        if previous.get("status") != "已废弃":
+            previous["status"] = "已废弃"
+            previous["pending"] = False
+
+        rows = store.rows(self.MODULE)
+        new_id = max((int(r.get("id", 0)) for r in rows), default=0) + 1
+        entry = {
+            "id": new_id,
+            "契约编号": contract_code,
+            "源字段": previous.get("源字段", ""),
+            "目标字段": previous.get("目标字段", ""),
+            "数据类型": data_type or previous.get("数据类型", "string"),
+            "转换规则": new_rule,
+            "必填标记": previous.get("必填标记", "是"),
+            "默认值": previous.get("默认值", ""),
+            "契约版本": new_version,
+            "status": "已生效",
+            "pending": False,
+            "abnormal": False,
+            "上一版本": previous.get("契约版本", ""),
+        }
+        rows.append(entry)
+
+        self._write_jsonl(
+            self._data_dir("events") / "contract_revise_log.jsonl",
+            [{
+                "action": "revise", "contract_code": contract_code,
+                "old_version": previous.get("契约版本", ""), "new_version": new_version,
+                "new_rule": new_rule, "at": time.time(),
+            }],
+        )
+        return {
+            "contract_code": contract_code,
+            "contract_id": new_id,
+            "previous_version": previous.get("契约版本", ""),
+            "new_version": new_version,
+            "rule": new_rule,
+            "entry": entry,
+        }
+
+    def get_remap_worklist(self, worklist_code: str) -> dict[str, Any]:
+        """字段契约侧入口：读取与拒收回执共享的待重新映射记录清单。"""
+        remap_svc = self._safe_import(
+            "app.services.remap_worklist", "RemapWorklistService")()
+        items = remap_svc.list_worklist(worklist_code=worklist_code)
+        return {"worklist_code": worklist_code, "total": len(items), "items": items}
